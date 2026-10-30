@@ -1,0 +1,433 @@
+<title>Gua Kristal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bowlby+One&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* Layout: one narrow column. Title and HUD strip above a 2:3 canvas stage, controls hint below. Dark cave world, amber lantern as the only warm light, teal crystals as the reward. */
+:root {
+  --bg: #12161c;
+  --panel: #1b212b;
+  --line: #2a3140;
+  --fg: #e9e4d8;
+  --muted: #9aa3b2;
+  --lamp: #f2b35a;
+  --gem: #5ad1c8;
+  --danger: #e8665a;
+  --font-display: "Bowlby One", Impact, "Arial Black", sans-serif;
+  --font-body: "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  padding-block: 20px 28px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 420px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+h1 { font-family: var(--font-display); font-weight: 400; font-size: 28px; letter-spacing: 0.01em; margin: 0; color: var(--lamp); text-wrap: balance; }
+header small { color: var(--muted); font-size: 13px; }
+.hud { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.stat span { display: block; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.stat b { display: flex; align-items: center; gap: 4px; min-height: 26px; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pip { width: 11px; height: 11px; border-radius: 50%; background: var(--lamp); }
+.pip.off { opacity: 0.18; }
+.stage { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); touch-action: none; user-select: none; -webkit-user-select: none; background: #0d1015; }
+canvas { display: block; width: 100%; height: auto; aspect-ratio: 2 / 3; max-width: 100%; touch-action: none; }
+#overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; background: rgba(10, 12, 16, 0.8); }
+#overlay h2 { font-family: var(--font-display); font-weight: 400; font-size: 26px; margin: 0; color: var(--fg); text-wrap: balance; }
+#overlay p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; max-width: 30ch; }
+button { font-family: var(--font-display); font-size: 18px; background: var(--lamp); color: #1a1206; border: 0; border-radius: 10px; padding: 12px 28px; cursor: pointer; }
+button:hover { filter: brightness(1.08); }
+button:focus-visible { outline: 3px solid var(--gem); outline-offset: 3px; }
+.hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.hint b { color: var(--fg); font-weight: 500; }
+</style>
+
+<main class="wrap">
+  <header>
+    <h1>Gua Kristal</h1>
+    <small>Kumpulkan kristal, jangan tertimpa</small>
+  </header>
+
+  <section class="hud" aria-label="Papan skor">
+    <div class="stat"><span>Skor</span><b id="sScore">0</b></div>
+    <div class="stat"><span>Kombo</span><b id="sCombo">x1</b></div>
+    <div class="stat"><span>Nyawa</span><b id="sLives"></b></div>
+    <div class="stat"><span>Rekor</span><b id="sBest">0</b></div>
+  </section>
+
+  <div class="stage" id="stage">
+    <canvas id="c" width="360" height="540" aria-label="Area permainan"></canvas>
+    <div id="overlay">
+      <h2 id="ovTitle">Turun ke dalam gua</h2>
+      <p id="ovText">Geser jari atau gerakkan mouse untuk berjalan. Tangkap kristal, hindari stalaktit yang jatuh.</p>
+      <button id="startBtn" type="button">Mulai</button>
+    </div>
+  </div>
+
+  <p class="hint"><b>HP:</b> geser jari di area gua. <b>Laptop:</b> gerakkan mouse atau tekan tombol panah / A dan D. Kristal berturut-turut tanpa terkena batu menaikkan kombo sampai x5.</p>
+</main>
+
+<script>
+(function () {
+  var W = 360, H = 540, FLOOR = H - 24, CEIL = 26, HEAD = FLOOR - 42;
+  var cv = document.getElementById('c');
+  var ctx = cv.getContext('2d');
+  var stage = document.getElementById('stage');
+  var overlay = document.getElementById('overlay');
+  var ovTitle = document.getElementById('ovTitle');
+  var ovText = document.getElementById('ovText');
+  var startBtn = document.getElementById('startBtn');
+  var elScore = document.getElementById('sScore');
+  var elCombo = document.getElementById('sCombo');
+  var elLives = document.getElementById('sLives');
+  var elBest = document.getElementById('sBest');
+  var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var best = 0;
+  try { best = parseInt(localStorage.getItem('gua-kristal-best'), 10) || 0; } catch (e) {}
+
+  var st = 'idle';
+  var score = 0, lives = 3, combo = 1, t = 0, shake = 0, flash = 0, hitCool = 0;
+  var rocks = [], gems = [], parts = [], dust = [];
+  var P = { x: W / 2, tx: W / 2, dir: 1 };
+  var keys = {};
+  var rockT = 0, gemT = 0, lastT = 0;
+
+  var ceilPts = [];
+  for (var cx = 0; cx <= W; cx += 18) ceilPts.push([cx, CEIL + 6 + Math.random() * 14]);
+  for (var i = 0; i < 36; i++) dust.push({ x: Math.random() * W, y: Math.random() * H, s: 0.6 + Math.random() * 1.4, v: 4 + Math.random() * 10 });
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+  }
+
+  function burst(x, y, col, n, spd) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, s = rand(0.3, 1) * spd;
+      parts.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - spd * 0.4, life: 0, max: rand(0.35, 0.8), col: col, size: rand(1.5, 3.5) });
+    }
+  }
+
+  function renderHud() {
+    var s = String(score), c = 'x' + combo;
+    if (elScore.textContent !== s) elScore.textContent = s;
+    if (elCombo.textContent !== c) elCombo.textContent = c;
+    if (elBest.textContent !== String(best)) elBest.textContent = String(best);
+    var html = '';
+    for (var i = 0; i < 3; i++) html += '<span class="pip' + (i < lives ? '' : ' off') + '"></span>';
+    if (elLives.dataset.v !== html) { elLives.innerHTML = html; elLives.dataset.v = html; }
+  }
+
+  function showOverlay(title, text, btn) {
+    ovTitle.textContent = title;
+    ovText.textContent = text;
+    startBtn.textContent = btn;
+    overlay.hidden = false;
+  }
+
+  function start() {
+    score = 0; lives = 3; combo = 1; t = 0; shake = 0; flash = 0; hitCool = 0;
+    rocks = []; gems = []; parts = [];
+    rockT = 0.6; gemT = 0.3;
+    P.x = P.tx = W / 2;
+    st = 'play';
+    overlay.hidden = true;
+    lastT = performance.now();
+    renderHud();
+  }
+
+  function end() {
+    st = 'over';
+    var rec = score > best;
+    if (rec) {
+      best = score;
+      try { localStorage.setItem('gua-kristal-best', String(best)); } catch (e) {}
+    }
+    showOverlay('Gua runtuh', 'Skor ' + score + (rec ? ' (rekor baru!)' : '') + '. Rekor kamu ' + best + '.', 'Main lagi');
+    renderHud();
+  }
+
+  function hurt(x, y) {
+    lives -= 1;
+    combo = 1;
+    shake = 14;
+    flash = 0.35;
+    hitCool = 1.0;
+    burst(x, y, '#e8665a', 18, 180);
+    if (lives <= 0) end();
+  }
+
+  function spawnRock() {
+    var w = rand(18, 36);
+    var x = Math.random() < 0.35 ? clamp(P.x + rand(-45, 45), 22, W - 22) : rand(22, W - 22);
+    rocks.push({ x: x, y: CEIL, w: w, h: w * rand(1.7, 2.2), vy: 0, state: 'warn', timer: Math.max(0.45, 0.95 - t * 0.01), seed: Math.random() * 10 });
+  }
+
+  function spawnGem() {
+    gems.push({ x: rand(24, W - 24), y: -12, vy: 90 + Math.min(80, t * 1.5), r: 9, ph: Math.random() * 6 });
+  }
+
+  function update(dt) {
+    t += dt;
+    var kx = (keys.ArrowRight || keys.d ? 1 : 0) - (keys.ArrowLeft || keys.a ? 1 : 0);
+    if (kx) P.tx += kx * 330 * dt;
+    P.tx = clamp(P.tx, 18, W - 18);
+    var dx = P.tx - P.x;
+    P.x += dx * Math.min(1, dt * 16);
+    if (Math.abs(dx) > 1) P.dir = dx > 0 ? 1 : -1;
+    if (hitCool > 0) hitCool -= dt;
+
+    rockT -= dt;
+    if (rockT <= 0) { spawnRock(); rockT = Math.max(0.35, 1.1 - t * 0.012) * rand(0.8, 1.2); }
+    gemT -= dt;
+    if (gemT <= 0) { spawnGem(); gemT = rand(0.8, 1.5); }
+
+    for (var i = rocks.length - 1; i >= 0; i--) {
+      var r = rocks[i];
+      if (r.state === 'warn') {
+        r.timer -= dt;
+        if (Math.random() < dt * 18) parts.push({ x: r.x + rand(-r.w / 3, r.w / 3), y: CEIL + 8, vx: rand(-8, 8), vy: 20, life: 0, max: 0.5, col: '#6b7488', size: 1.5 });
+        if (r.timer <= 0) r.state = 'fall';
+      } else {
+        r.vy = Math.min(r.vy + 1000 * dt, 560 + t * 2);
+        r.y += r.vy * dt;
+        var tip = r.y + r.h;
+        var depth = tip - HEAD;
+        if (hitCool <= 0 && depth > 0 && Math.abs(r.x - P.x) < r.w * 0.5 * Math.min(1, depth / r.h) + 10) {
+          burst(r.x, tip, '#6b7488', 10, 140);
+          rocks.splice(i, 1);
+          hurt(P.x, FLOOR - 24);
+          if (st !== 'play') return;
+          continue;
+        }
+        if (tip >= FLOOR) {
+          burst(r.x, FLOOR, '#6b7488', 10, 140);
+          score += 1;
+          rocks.splice(i, 1);
+        }
+      }
+    }
+
+    for (var j = gems.length - 1; j >= 0; j--) {
+      var g = gems[j];
+      g.y += g.vy * dt;
+      if (Math.abs(g.x - P.x) < 22 && g.y > FLOOR - 52 && g.y < FLOOR + 6) {
+        score += 10 * combo;
+        combo = Math.min(5, combo + 1);
+        burst(g.x, g.y, '#5ad1c8', 14, 150);
+        gems.splice(j, 1);
+      } else if (g.y > FLOOR + 14) {
+        gems.splice(j, 1);
+      }
+    }
+
+    shake = Math.max(0, shake - 40 * dt);
+    flash = Math.max(0, flash - dt);
+    renderHud();
+  }
+
+  function stepParts(dt) {
+    for (var i = parts.length - 1; i >= 0; i--) {
+      var p = parts[i];
+      p.life += dt;
+      if (p.life >= p.max) { parts.splice(i, 1); continue; }
+      p.vy += 500 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+    }
+    for (var k = 0; k < dust.length; k++) {
+      var d = dust[k];
+      d.y += d.v * dt;
+      if (d.y > H) { d.y = 0; d.x = Math.random() * W; }
+    }
+  }
+
+  function drawRock(r) {
+    var ox = 0;
+    if (r.state === 'warn') {
+      ox = Math.sin(t * 70 + r.seed) * 1.6;
+      ctx.strokeStyle = 'rgba(232,102,90,0.2)';
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.moveTo(r.x, r.y + r.h);
+      ctx.lineTo(r.x, FLOOR);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    var x = r.x + ox, y = r.y - 2;
+    ctx.fillStyle = '#4a5365';
+    ctx.beginPath();
+    ctx.moveTo(x - r.w / 2, y);
+    ctx.lineTo(x + r.w / 2, y);
+    ctx.lineTo(x, y + r.h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#3a4252';
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + r.w / 2, y);
+    ctx.lineTo(x, y + r.h);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawPlayer() {
+    if (hitCool > 0 && Math.floor(t * 20) % 2 === 0) return;
+    ctx.save();
+    ctx.translate(P.x, FLOOR);
+    ctx.scale(P.dir, 1);
+    var step = Math.abs(P.tx - P.x) > 1.5 ? Math.sin(t * 22) * 3 : 0;
+    ctx.fillStyle = '#2a2f3a';
+    rr(-7, -12, 5, 12 + step * 0.3, 2); ctx.fill();
+    rr(2, -12, 5, 12 - step * 0.3, 2); ctx.fill();
+    ctx.fillStyle = '#8a4f27';
+    rr(-14, -30, 8, 16, 3); ctx.fill();
+    ctx.fillStyle = '#c2703a';
+    rr(-9, -32, 18, 22, 5); ctx.fill();
+    ctx.fillStyle = '#e2b48a';
+    ctx.beginPath(); ctx.arc(0, -37, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#f2b35a';
+    ctx.beginPath(); ctx.arc(0, -39, 8, Math.PI, 0); ctx.fill();
+    ctx.fillRect(-9, -40, 18, 3);
+    ctx.fillStyle = '#fff6d8';
+    ctx.beginPath(); ctx.arc(6, -42, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawGem(g) {
+    ctx.save();
+    ctx.translate(g.x, g.y);
+    ctx.rotate(Math.sin(t * 3 + g.ph) * 0.25);
+    ctx.shadowColor = '#5ad1c8';
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = '#5ad1c8';
+    ctx.beginPath();
+    ctx.moveTo(0, -g.r * 1.2); ctx.lineTo(g.r * 0.8, 0); ctx.lineTo(0, g.r * 1.2); ctx.lineTo(-g.r * 0.8, 0);
+    ctx.closePath(); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#a8f0e8';
+    ctx.beginPath();
+    ctx.moveTo(0, -g.r * 1.2); ctx.lineTo(-g.r * 0.8, 0); ctx.lineTo(0, g.r * 0.2);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.save();
+    if (shake > 0 && !reduceMotion) ctx.translate(rand(-1, 1) * shake * 0.5, rand(-1, 1) * shake * 0.5);
+
+    var bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#171c25'); bg.addColorStop(1, '#0d1015');
+    ctx.fillStyle = bg;
+    ctx.fillRect(-10, -10, W + 20, H + 20);
+
+    ctx.fillStyle = 'rgba(154,163,178,0.35)';
+    for (var k = 0; k < dust.length; k++) ctx.fillRect(dust[k].x, dust[k].y, dust[k].s, dust[k].s);
+
+    var wl = ctx.createLinearGradient(0, 0, 40, 0);
+    wl.addColorStop(0, '#232936'); wl.addColorStop(1, 'rgba(35,41,54,0)');
+    ctx.fillStyle = wl; ctx.fillRect(0, 0, 40, H);
+    var wr = ctx.createLinearGradient(W, 0, W - 40, 0);
+    wr.addColorStop(0, '#232936'); wr.addColorStop(1, 'rgba(35,41,54,0)');
+    ctx.fillStyle = wr; ctx.fillRect(W - 40, 0, 40, H);
+
+    ctx.fillStyle = '#2c3340';
+    ctx.fillRect(-10, FLOOR, W + 20, H - FLOOR + 10);
+    ctx.fillStyle = '#3a4252';
+    ctx.fillRect(-10, FLOOR, W + 20, 3);
+
+    ctx.fillStyle = '#2c3340';
+    ctx.beginPath();
+    ctx.moveTo(-10, -10);
+    ctx.lineTo(W + 10, -10);
+    ctx.lineTo(W + 10, CEIL);
+    for (var c = ceilPts.length - 1; c >= 0; c--) {
+      ctx.lineTo(ceilPts[c][0], ceilPts[c][1]);
+      if (c > 0) ctx.lineTo((ceilPts[c][0] + ceilPts[c - 1][0]) / 2, CEIL);
+    }
+    ctx.lineTo(-10, CEIL);
+    ctx.closePath();
+    ctx.fill();
+
+    for (var i = 0; i < rocks.length; i++) drawRock(rocks[i]);
+    drawPlayer();
+
+    var vg = ctx.createRadialGradient(P.x, FLOOR - 50, 40, P.x, FLOOR - 50, 340);
+    vg.addColorStop(0, 'rgba(10,12,16,0)');
+    vg.addColorStop(1, 'rgba(10,12,16,0.6)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(-10, -10, W + 20, H + 20);
+
+    ctx.globalCompositeOperation = 'lighter';
+    var lg = ctx.createRadialGradient(P.x, FLOOR - 40, 0, P.x, FLOOR - 40, 120);
+    lg.addColorStop(0, 'rgba(242,179,90,0.2)');
+    lg.addColorStop(1, 'rgba(242,179,90,0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(P.x - 130, FLOOR - 170, 260, 200);
+    ctx.globalCompositeOperation = 'source-over';
+
+    for (var j = 0; j < gems.length; j++) drawGem(gems[j]);
+
+    for (var m = 0; m < parts.length; m++) {
+      var p = parts[m];
+      ctx.globalAlpha = 1 - p.life / p.max;
+      ctx.fillStyle = p.col;
+      ctx.fillRect(p.x, p.y, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+
+    if (flash > 0) {
+      ctx.fillStyle = 'rgba(232,102,90,' + (flash * 0.8) + ')';
+      ctx.fillRect(-10, -10, W + 20, H + 20);
+    }
+    ctx.restore();
+  }
+
+  function loop(now) {
+    var dt = Math.min(0.05, (now - (lastT || now)) / 1000);
+    lastT = now;
+    if (st === 'play') update(dt);
+    else { shake = Math.max(0, shake - 40 * dt); flash = Math.max(0, flash - dt); t += dt; }
+    stepParts(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function setTarget(e) {
+    if (st !== 'play') return;
+    var r = cv.getBoundingClientRect();
+    P.tx = ((e.clientX - r.left) / r.width) * W;
+  }
+  stage.addEventListener('pointerdown', function (e) {
+    try { if (e.target === cv) cv.setPointerCapture(e.pointerId); } catch (err) {}
+    setTarget(e);
+  });
+  stage.addEventListener('pointermove', setTarget);
+
+  window.addEventListener('keydown', function (e) {
+    var k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (st !== 'play' && (k === 'Enter' || k === ' ') && document.activeElement !== startBtn) { e.preventDefault(); start(); return; }
+    keys[k] = true;
+    if (st === 'play' && (k === 'ArrowLeft' || k === 'ArrowRight' || k === ' ')) e.preventDefault();
+  });
+  window.addEventListener('keyup', function (e) {
+    var k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    keys[k] = false;
+  });
+  window.addEventListener('blur', function () { keys = {}; });
+  startBtn.addEventListener('click', start);
+
+  renderHud();
+  requestAnimationFrame(loop);
+})();
+</script>
